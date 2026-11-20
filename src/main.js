@@ -34,6 +34,36 @@ function setStatus(msg, kind) {
   statusEl.innerHTML = msg;
 }
 
+// 前置检测 WebGL：无 GPU 且被 Chrome 禁用软件渲染时，deck.gl 会抛出
+// "Failed to create WebGL context … SwiftShader … BindToCurrentSequence failed"。
+// 这里提前探测并给出可操作的提示，而不是让 luma.gl 抛出难懂的错误。
+function probeWebGL() {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2');
+  if (!gl) return { ok: false, renderer: null };
+  let renderer = null;
+  try {
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  } catch (_) { /* 忽略，renderer 仅用于提示 */ }
+  const lose = gl.getExtension('WEBGL_lose_context');
+  if (lose) lose.loseContext();
+  return { ok: true, renderer: String(renderer || '') };
+}
+
+function webglUnavailableMessage(renderer) {
+  const isSwiftShader = renderer && /swiftshader|software/i.test(renderer);
+  return `<b>无法创建 WebGL 上下文</b><br>` +
+    `当前浏览器环境没有可用的硬件 WebGL（${renderer ? `渲染器：${renderer}` : '上下文创建失败'}）。<br>` +
+    (isSwiftShader
+      ? '检测到 Chrome 的软件渲染（SwiftShader）被新版默认禁用。<br>'
+      : '') +
+    `解决方法：<br>` +
+    `1. 本地浏览器：设置 → 系统 → 开启“使用硬件加速”，重启浏览器；<br>` +
+    `2. 无 GPU 的云桌面 / 虚拟机 / 无头浏览器：以 <code>--enable-unsafe-swiftshader</code> 或 <code>--use-gl=angle --use-angle=swiftshader</code> 启动 Chrome；<br>` +
+    `3. 换用有 GPU 的设备访问本页。`;
+}
+
 function updateTileStats() {
   $('m-tiles').textContent = tilesErrored
     ? `${tilesLoaded}（失败 ${tilesErrored}）`
@@ -119,13 +149,23 @@ async function render(key) {
     });
 
     if (!deck) {
+      const probe = probeWebGL();
+      if (!probe.ok) {
+        throw new Error(webglUnavailableMessage(null));
+      }
       deck = new Deck({
         canvas: 'deck-canvas',
         initialViewState: lastView,
         controller: true,
         layers: [layer],
         onError: (err) => {
-          setStatus(`<b>渲染错误</b><br>${err?.message || String(err)}`, 'err');
+          const msg = err?.message || String(err);
+          setStatus(
+            /WebGL context|SwiftShader|BindToCurrentSequence/i.test(msg)
+              ? webglUnavailableMessage(probe.renderer)
+              : `<b>渲染错误</b><br>${msg}`,
+            'err'
+          );
           busyEl.classList.add('hidden');
         }
       });
