@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>deck.gl-raster v0.10 · 浏览器直读 COG 渲染</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --line: #e3e6ea; --text: #1f2937;
+    --muted: #6b7280; --faint: #9ca3af; --blue: #2563eb; --green: #059669;
+    --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px; }
+  .app { display: grid; grid-template-columns: 350px 1fr; height: 100vh; }
+  .side { background: var(--card); border-right: 1px solid var(--line); padding: 20px; overflow-y: auto; }
+  .side h1 { margin: 0 0 4px; font-size: 17px; }
+  .tag { font-size: 11px; color: var(--green); font-weight: 600; }
+  .desc { margin: 10px 0 18px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .group { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+  .group h2 { margin: 0 0 10px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  label.field { display: block; font-size: 12px; margin-bottom: 12px; }
+  label.field span { display: block; color: var(--muted); margin-bottom: 4px; }
+  select { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; font-family: inherit; background: #fff; }
+  button { width: 100%; padding: 9px; border: 0; border-radius: 7px; background: var(--blue); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { opacity: .55; cursor: default; }
+  button:disabled:hover { background: var(--blue); }
+  button.secondary { background: #eef2f7; color: var(--text); margin-top: 8px; }
+  button.secondary:hover { background: #e2e8f0; }
+  .status { margin-top: 14px; padding: 10px 12px; border-radius: 7px; font-size: 12px; line-height: 1.6; background: #f7f8fa; border: 1px solid var(--line); }
+  .status.ok { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+  .status.err { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+  .status b { font-family: var(--mono); }
+  .kv { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  .kv:last-child { border: 0; }
+  .kv span:first-child { color: var(--muted); }
+  .kv span:last-child { font-family: var(--mono); text-align: right; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note { font-size: 11px; color: var(--faint); line-height: 1.6; margin-top: 10px; }
+  pre { background: #f7f8fa; border: 1px solid var(--line); border-radius: 7px; padding: 10px; font-family: var(--mono); font-size: 10px; line-height: 1.55; overflow-x: auto; margin: 0; }
+  .stage { position: relative; background: #dfe4e8; }
+  #deck-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .overlay { position: absolute; left: 14px; bottom: 14px; background: rgba(255,255,255,.93); border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px; font-size: 11px; color: var(--muted); pointer-events: none; }
+  .overlay b { color: var(--text); }
+  .busy { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(246,247,249,.9); z-index: 10; font-size: 13px; color: var(--muted); }
+  .busy.hidden { display: none; }
+  .spin { width: 22px; height: 22px; border: 2px solid #d5dbe3; border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; grid-template-rows: auto 60vh; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <h1>浏览器直读 COG</h1>
+    <div class="tag">deck.gl-raster v0.10 · 真实渲染</div>
+    <p class="desc">无后端瓦片服务。浏览器拉取 COG 字节布局元数据，合并相邻瓦片的 HTTP Range 请求，GPU 重投影后绘制。数据源为官方示例使用的真实 USGS / LINZ COG。</p>
+
+    <div class="group">
+      <h2>数据源</h2>
+      <label class="field"><span>选择 COG</span>
+        <select id="cog-select">
+          <option value="usgs">USGS Emigrant Gap（7.9 MB · 128px 小瓦片，coalescing 收益最大）</option>
+          <option value="linz">LINZ 新西兰影像（16 MB · EPSG:2193 → Web Mercator 重投影）</option>
+        </select>
+      </label>
+      <button id="load">加载并渲染</button>
+      <button id="reset" class="secondary">复位视角</button>
+    </div>
+
+    <div class="group">
+      <h2>运行状态</h2>
+      <div class="status" id="status">等待加载…</div>
+      <div style="margin-top:10px">
+        <div class="kv"><span>瓦片尺寸</span><span id="m-tile">—</span></div>
+        <div class="kv"><span>地理范围</span><span id="m-bounds">—</span></div>
+        <div class="kv"><span>已加载瓦片</span><span id="m-tiles">—</span></div>
+        <div class="kv"><span>图层数</span><span id="m-layers">—</span></div>
+        <div class="kv"><span>就绪耗时</span><span id="m-time">—</span></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>实际调用代码</h2>
+      <pre>import { COGLayer, COGSource }
+  from '@developmentseed/deck.gl-geotiff';
+
+// 预打开并缓存，复用同一 source
+// 可跳过 header 读取且不重置瓦片
+const src = await COGSource.open(COG_URL);
+
+const layer = new COGLayer({
+  id: 'cog',
+  source: src,             // v0.9 是 geotiff:
+  onTileLoad: () => n++,   // 瓦片进度
+  onTileError: () => e++,
+});
+
+new Deck({
+  canvas, controller: true,
+  layers: [layer],
+});</pre>
+      <p class="note">v0.10 把 <code>geotiff</code> 改为 <code>source</code>、<code>onGeoTIFFLoad</code> 改为 <code>onSourceLoad</code>。合并请求与流式解码由内置 range reader 完成，无需手动配置。默认 <code>maxRequests:256</code> / <code>debounceTime:50ms</code>，6 请求每域名限流。</p>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <canvas id="deck-canvas"></canvas>
+    <div class="busy" id="busy"><div class="spin"></div><span>正在打开 COG 并流式解码瓦片…</span></div>
+    <div class="overlay">拖拽平移 · 滚轮缩放 · <b id="ov-title">USGS Emigrant Gap</b> · 瓦片 <b id="ov-tiles">0</b></div>
+  </main>
+</div>
+<script>
+  // 兜底：若本页被当作普通静态文件打开（非 Vite），/src/main.js 会 404，
+  // 模块脚本根本不执行，遮罩会永远转。这里 6 秒后给出明确指引。
+  window.__cogDemoBooted = false;
+  setTimeout(function () {
+    if (window.__cogDemoBooted) return;
+    var status = document.getElementById('status');
+    var busy = document.getElementById('busy');
+    if (status) {
+      status.className = 'status err';
+      status.innerHTML = '<b>没有启动</b><br>本页必须通过 Vite 打开：<br>在 cog-render-demo 目录执行 <code>npm run dev</code>，<br>然后访问 <code>http://127.0.0.1:5173/</code>。';
+    }
+    if (busy) {
+      busy.innerHTML = '<div style="max-width:420px;text-align:center;line-height:1.8">' +
+        '<div style="font-size:15px;font-weight:600;color:#991b1b;margin-bottom:8px">当前是静态文件预览，无法运行</div>' +
+        '<div>deck.gl-raster 的依赖需要 Vite 做模块解析和 worker 打包。<br>' +
+        '请在 <code>cog-render-demo</code> 目录执行 <code>npm run dev</code>，<br>' +
+        '打开 <b>http://127.0.0.1:5173/</b>（不是这个地址）。</div></div>';
+    }
+  }, 6000);
+</script>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

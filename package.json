@@ -1,0 +1,23 @@
+{
+  "name": "cog-render-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^9.4.1",
+    "@deck.gl/extensions": "^9.4.1",
+    "@deck.gl/geo-layers": "^9.4.1",
+    "@deck.gl/layers": "^9.4.1",
+    "@deck.gl/mesh-layers": "^9.4.1",
+    "@developmentseed/deck.gl-geotiff": "^0.10.0",
+    "@luma.gl/core": "^9.4.2"
+  },
+  "devDependencies": {
+    "vite": "^6.1.0"
+  }
+}
